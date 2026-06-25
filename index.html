@@ -591,7 +591,30 @@ function update(dt) {
     for (let r = robots.length - 1; r >= 0; r--) {
       const rob = robots[r];
       if (rob.dead) continue;
-      if (b.mesh.position.distanceTo(rob.mesh.position) < 0.65) {
+
+      const rx = rob.mesh.position.x;
+      const ry = rob.mesh.position.y;
+      const rz = rob.mesh.position.z;
+      const bx = b.mesh.position.x;
+      const by = b.mesh.position.y;
+      const bz = b.mesh.position.z;
+
+      // Kopf-Hitbox: Mittelpunkt bei y+1.6, Radius 0.22
+      const headDx = bx - rx, headDy = by - (ry + 1.6), headDz = bz - rz;
+      const headHit = (headDx*headDx + headDy*headDy + headDz*headDz) < 0.22 * 0.22;
+
+      // Körper-Hitbox: Mittelpunkt bei y+1.0, Radius 0.42
+      const bodyDx = bx - rx, bodyDy = by - (ry + 1.0), bodyDz = bz - rz;
+      const bodyHit = (bodyDx*bodyDx + bodyDy*bodyDy + bodyDz*bodyDz) < 0.42 * 0.42;
+
+      if (headHit) {
+        sfxHeadshot();
+        flashGold(rob);
+        killRobot(r);
+        scene.remove(b.mesh);
+        bullets.splice(i, 1);
+        break;
+      } else if (bodyHit) {
         rob.hp -= b.dmg;
         sfxRobotHit();
         flashRed(rob);
@@ -643,6 +666,16 @@ function flashRed(rob) {
   setTimeout(() => {
     if (!rob.dead) rob.mesh.traverse(c => { if (c.isMesh && c.material.color) c.material.color.set(0x778899); });
   }, 120);
+}
+
+function flashGold(rob) {
+  rob.mesh.traverse(c => { if (c.isMesh && c.material.color) c.material.color.set(0xffdd00); });
+}
+
+function sfxHeadshot() {
+  // Höherer, schärferer Klang als normaler Treffer
+  playTone({ type: 'square', freqStart: 1200, freqEnd: 600, vol: 0.3, duration: 0.12 });
+  playTone({ type: 'sine',   freqStart: 800,  freqEnd: 400, vol: 0.2, duration: 0.18, delay: 0.06 });
 }
 
 function killRobot(idx) {
