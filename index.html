@@ -290,6 +290,11 @@ function sfxPlayerHit() {
   playTone({ type: 'sine', freqStart: 80, freqEnd: 40, vol: 0.5, duration: 0.35 });
 }
 
+function sfxLaser() {
+  playTone({ type: 'sine',     freqStart: 1400, freqEnd: 800,  vol: 0.25, duration: 3.0 });
+  playTone({ type: 'sawtooth', freqStart: 700,  freqEnd: 400,  vol: 0.1,  duration: 3.0 });
+}
+
 function sfxWaveStart() {
   [0, 0.12, 0.24].forEach((d, i) => {
     playTone({ type: 'sine', freqStart: 220 + i * 110, freqEnd: 440 + i * 110, vol: 0.2, duration: 0.2, delay: d });
@@ -345,8 +350,8 @@ hudMesh.position.set(0, -0.28, -0.75);
 hudMesh.renderOrder = 999;
 camera.add(hudMesh);
 
-const WEAPON_NAMES = ['PISTOLE', 'MASCHINENGEWEHR', 'SCHROTFLINTE'];
-const WEAPON_COLORS = ['#ffee00', '#00eeff', '#ff8800'];
+const WEAPON_NAMES = ['PISTOLE', 'MASCHINENGEWEHR', 'SCHROTFLINTE', 'LASER'];
+const WEAPON_COLORS = ['#ffee00', '#00eeff', '#ff8800', '#ff0066'];
 
 function drawHUD(gs) {
   const W = 512, H = 200;
@@ -373,20 +378,37 @@ function drawHUD(gs) {
   // Waffe
   hc.fillStyle = WEAPON_COLORS[gs.weapon];
   hc.font = 'bold 20px Arial';
-  hc.fillText(`[ ${WEAPON_NAMES[gs.weapon]} ]`, 16, 72);
+  hc.fillText(`[ ${WEAPON_NAMES[gs.weapon]} ]`, 16, 62);
+
+  // Laser-Ladeanzeige
+  if (gs.weapon === 3) {
+    hc.fillStyle = '#1a1a1a';
+    hc.fillRect(16, 70, 300, 18);
+    hc.fillStyle = gs.laserCharge >= 1 ? '#ff0066' : '#661133';
+    hc.fillRect(16, 70, 300 * gs.laserCharge, 18);
+    hc.strokeStyle = '#444';
+    hc.lineWidth = 1;
+    hc.strokeRect(16, 70, 300, 18);
+    hc.fillStyle = '#fff';
+    hc.font = '13px Arial';
+    const laserLabel = gs.laserActive
+      ? `AKTIV — ${gs.laserTime.toFixed(1)}s`
+      : gs.laserCharge >= 1 ? 'BEREIT — Trigger drücken' : `LÄDT... ${Math.floor(gs.laserCharge * 100)}%`;
+    hc.fillText(laserLabel, 20, 84);
+  }
 
   // Welle | Score | Abschüsse
   hc.fillStyle = '#aaaadd';
   hc.font = '17px Arial';
-  hc.fillText(`Welle: ${gs.wave}`, 16, 104);
+  hc.fillText(`Welle: ${gs.wave}`, 16, 108);
   hc.fillStyle = '#ffffff';
-  hc.fillText(`Score: ${gs.score}`, 16, 130);
+  hc.fillText(`Score: ${gs.score}`, 16, 134);
   hc.fillStyle = '#ff9955';
-  hc.fillText(`Abschüsse: ${gs.kills}`, 16, 156);
+  hc.fillText(`Abschüsse: ${gs.kills}`, 16, 160);
 
   // Roboter übrig
   hc.fillStyle = '#55ccff';
-  hc.fillText(`Roboter: ${gs.alive}`, 280, 104);
+  hc.fillText(`Roboter: ${gs.alive}`, 280, 108);
 
   hudTex.needsUpdate = true;
 }
@@ -401,6 +423,27 @@ crosshair.add(hBar, vBar, dot);
 crosshair.position.set(0, 0, -1);
 crosshair.renderOrder = 998;
 camera.add(crosshair);
+
+// ─── LASER-STRAHL ─────────────────────────────────────────────────────────────
+const laserBeam = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.012, 0.012, 35, 8),
+  new THREE.MeshBasicMaterial({ color: 0xff0055, transparent: true, opacity: 0.9, depthTest: false })
+);
+laserBeam.rotation.x = Math.PI / 2;
+laserBeam.position.z = -17.5;
+laserBeam.visible = false;
+laserBeam.renderOrder = 997;
+camera.add(laserBeam);
+
+const laserGlow = new THREE.Mesh(
+  new THREE.CylinderGeometry(0.04, 0.04, 35, 8),
+  new THREE.MeshBasicMaterial({ color: 0xff0055, transparent: true, opacity: 0.2, depthTest: false })
+);
+laserGlow.rotation.x = Math.PI / 2;
+laserGlow.position.z = -17.5;
+laserGlow.visible = false;
+laserGlow.renderOrder = 996;
+camera.add(laserGlow);
 
 // ─── CONTROLLER ───────────────────────────────────────────────────────────────
 const ctrl0 = renderer.xr.getController(0);
@@ -441,6 +484,10 @@ const gs = {
   weaponBtnWasDown: false,
   timeSurvived: 0,
   waveEnding: false,
+  laserActive: false,
+  laserTime: 0,
+  laserCharge: 1,
+  laserRecharging: false,
 };
 
 // ─── GEGNER ───────────────────────────────────────────────────────────────────
@@ -509,6 +556,7 @@ function spawnWave() {
 const bullets = [];
 
 function shoot() {
+  if (gs.weapon === 3) return;
   const w = WEAPONS[gs.weapon];
   for (let i = 0; i < w.pellets; i++) {
     const dir = new THREE.Vector3(0, 0, -1);
@@ -550,16 +598,27 @@ function handleInput(dt) {
   }
 
   // Schießen — Pistole/Schrotflinte: einmal pro Druck; MG: gehalten
-  if (triggerDown && gs.cooldown <= 0 && gs.running) {
+  if (triggerDown && gs.cooldown <= 0 && gs.running && gs.weapon !== 3) {
     if (gs.weapon === 1 || !gs.triggerWasDown) {
       shoot();
     }
   }
+
+  // Laser aktivieren
+  if (gs.weapon === 3 && triggerDown && !gs.triggerWasDown && gs.running) {
+    if (gs.laserCharge >= 1 && !gs.laserActive) {
+      gs.laserActive = true;
+      gs.laserTime = 3.0;
+      gs.laserCharge = 0;
+      gs.laserRecharging = false;
+      sfxLaser();
+    }
+  }
   gs.triggerWasDown = triggerDown;
 
-  // Waffe wechseln
-  if (weaponBtnDown && !gs.weaponBtnWasDown) {
-    gs.weapon = (gs.weapon + 1) % 3;
+  // Waffe wechseln (nicht während Laser aktiv)
+  if (weaponBtnDown && !gs.weaponBtnWasDown && !gs.laserActive) {
+    gs.weapon = (gs.weapon + 1) % 4;
     gs.cooldown = 0;
   }
   gs.weaponBtnWasDown = weaponBtnDown;
@@ -579,6 +638,54 @@ function update(dt) {
 
   // Score
   gs.score = gs.kills * 10 + (gs.wave - 1) * 50 + Math.floor(gs.timeSurvived);
+
+  // ─── LASER ──────────────────────────────────────────────────────────────────
+  if (gs.laserActive) {
+    gs.laserTime -= dt;
+    const pulse = 0.75 + Math.sin(Date.now() * 0.025) * 0.25;
+    laserBeam.visible = true;
+    laserGlow.visible = true;
+    laserBeam.material.opacity = pulse;
+    laserGlow.material.opacity = pulse * 0.22;
+
+    // Laserstrahl-Richtung aus Kamera
+    const laserOrigin = new THREE.Vector3();
+    const laserDir = new THREE.Vector3(0, 0, -1);
+    camera.getWorldPosition(laserOrigin);
+    laserDir.applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
+
+    for (let r = robots.length - 1; r >= 0; r--) {
+      const rob = robots[r];
+      if (rob.dead) continue;
+      // Körpermitte des Roboters
+      const cx = rob.mesh.position.x - laserOrigin.x;
+      const cy = (rob.mesh.position.y + 1.0) - laserOrigin.y;
+      const cz = rob.mesh.position.z - laserOrigin.z;
+      const proj = cx * laserDir.x + cy * laserDir.y + cz * laserDir.z;
+      if (proj < 0) continue;
+      const dx = cx - proj * laserDir.x;
+      const dy = cy - proj * laserDir.y;
+      const dz = cz - proj * laserDir.z;
+      if (dx*dx + dy*dy + dz*dz < 0.5 * 0.5) {
+        sfxRobotDie();
+        killRobot(r);
+      }
+    }
+
+    if (gs.laserTime <= 0) {
+      gs.laserActive = false;
+      gs.laserRecharging = true;
+      laserBeam.visible = false;
+      laserGlow.visible = false;
+    }
+  } else {
+    laserBeam.visible = false;
+    laserGlow.visible = false;
+    if (gs.laserRecharging) {
+      gs.laserCharge = Math.min(1, gs.laserCharge + dt / 8);
+      if (gs.laserCharge >= 1) gs.laserRecharging = false;
+    }
+  }
 
   // Geschosse
   for (let i = bullets.length - 1; i >= 0; i--) {
@@ -701,7 +808,10 @@ function startGame() {
     weapon: 0, cooldown: 0,
     triggerWasDown: false, weaponBtnWasDown: false,
     timeSurvived: 0, waveEnding: false,
+    laserActive: false, laserTime: 0, laserCharge: 1, laserRecharging: false,
   });
+  laserBeam.visible = false;
+  laserGlow.visible = false;
 
   document.getElementById('menu').style.display    = 'none';
   document.getElementById('gameover').style.display = 'none';
