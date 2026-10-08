@@ -450,15 +450,8 @@ const ctrl0 = renderer.xr.getController(0);
 const ctrl1 = renderer.xr.getController(1);
 playerRig.add(ctrl0, ctrl1);
 
+// Beide Controller: Zielstrahl
 [ctrl0, ctrl1].forEach(c => {
-  const body = new THREE.Mesh(
-    new THREE.CylinderGeometry(0.018, 0.024, 0.12, 8),
-    new THREE.MeshLambertMaterial({ color: 0x333344 })
-  );
-  body.rotation.x = Math.PI / 2;
-  c.add(body);
-
-  // Zielstrahl
   const pts = [new THREE.Vector3(0,0,0), new THREE.Vector3(0,0,-20)];
   const ray = new THREE.Line(
     new THREE.BufferGeometry().setFromPoints(pts),
@@ -466,6 +459,71 @@ playerRig.add(ctrl0, ctrl1);
   );
   c.add(ray);
 });
+
+// Zweiter Controller: einfacher Griff
+{
+  const body = new THREE.Mesh(
+    new THREE.CylinderGeometry(0.018, 0.024, 0.12, 8),
+    new THREE.MeshLambertMaterial({ color: 0x333344 })
+  );
+  body.rotation.x = Math.PI / 2;
+  ctrl1.add(body);
+}
+
+// ─── WAFFEN-MODELLE ───────────────────────────────────────────────────────────
+function mkBox(w, h, d, mat, x, y, z) {
+  const m = new THREE.Mesh(new THREE.BoxGeometry(w, h, d), mat);
+  m.position.set(x, y, z);
+  return m;
+}
+function mkCyl(r, h, mat) {
+  return new THREE.Mesh(new THREE.CylinderGeometry(r, r, h, 8), mat);
+}
+
+const wMats = {
+  dark:      new THREE.MeshLambertMaterial({ color: 0x222233 }),
+  metal:     new THREE.MeshLambertMaterial({ color: 0x445566 }),
+  barrel:    new THREE.MeshLambertMaterial({ color: 0x111122 }),
+  stock:     new THREE.MeshLambertMaterial({ color: 0x6b3f1c }),
+  laser:     new THREE.MeshBasicMaterial({ color: 0xff0066 }),
+  laserGlow: new THREE.MeshBasicMaterial({ color: 0xff66aa, transparent: true, opacity: 0.45 }),
+};
+
+// Pistole
+const wPistol = new THREE.Group();
+wPistol.add(mkBox(0.024, 0.090, 0.024, wMats.dark, 0, -0.005, 0.010));
+wPistol.add(mkBox(0.026, 0.026, 0.110, wMats.dark, 0,  0.042, -0.020));
+{ const b = mkCyl(0.009, 0.09, wMats.barrel); b.rotation.x = Math.PI/2; b.position.set(0, 0.044, -0.085); wPistol.add(b); }
+
+// MG
+const wMG = new THREE.Group();
+wMG.add(mkBox(0.028, 0.090, 0.028, wMats.dark,  0, -0.008,  0.020));
+wMG.add(mkBox(0.038, 0.038, 0.240, wMats.metal, 0,  0.030, -0.070));
+{ const b = mkCyl(0.011, 0.20, wMats.barrel); b.rotation.x = Math.PI/2; b.position.set(0, 0.038, -0.120); wMG.add(b); }
+wMG.add(mkBox(0.024, 0.080, 0.022, wMats.dark, 0, -0.025, -0.040));
+
+// Schrotflinte
+const wShotgun = new THREE.Group();
+wShotgun.add(mkBox(0.028, 0.090, 0.028, wMats.dark,  0, -0.005,  0.020));
+wShotgun.add(mkBox(0.040, 0.040, 0.140, wMats.stock, 0,  0.022,  0.080));
+wShotgun.add(mkBox(0.040, 0.040, 0.100, wMats.metal, 0,  0.022, -0.025));
+[-0.014, 0.014].forEach(x => { const b = mkCyl(0.013, 0.22, wMats.barrel); b.rotation.x = Math.PI/2; b.position.set(x, 0.022, -0.120); wShotgun.add(b); });
+
+// Laserkanone
+const wLaserGun = new THREE.Group();
+wLaserGun.add(mkBox(0.028, 0.090, 0.028, wMats.dark,  0, -0.005,  0.020));
+wLaserGun.add(mkBox(0.046, 0.040, 0.180, wMats.metal, 0,  0.024, -0.050));
+[-0.027, 0.027].forEach(x => wLaserGun.add(mkBox(0.010, 0.022, 0.120, wMats.laser, x, 0.024, -0.050)));
+{ const e = mkCyl(0.016, 0.04, wMats.laser);     e.rotation.x = Math.PI/2; e.position.set(0, 0.024, -0.155); wLaserGun.add(e); }
+{ const g = mkCyl(0.026, 0.04, wMats.laserGlow); g.rotation.x = Math.PI/2; g.position.set(0, 0.024, -0.155); wLaserGun.add(g); }
+
+const weaponMeshes = [wPistol, wMG, wShotgun, wLaserGun];
+weaponMeshes.forEach(w => ctrl0.add(w));
+
+function updateWeaponVis() {
+  weaponMeshes.forEach((w, i) => { w.visible = (i === gs.weapon); });
+}
+updateWeaponVis();
 
 // ─── WAFFEN-KONFIGURATION ─────────────────────────────────────────────────────
 const WEAPONS = [
@@ -620,13 +678,33 @@ function handleInput(dt) {
   if (weaponBtnDown && !gs.weaponBtnWasDown && !gs.laserActive) {
     gs.weapon = (gs.weapon + 1) % 4;
     gs.cooldown = 0;
+    updateWeaponVis();
   }
   gs.weaponBtnWasDown = weaponBtnDown;
+
+  // ─── BEWEGUNG mit linkem Joystick ─────────────────────────────────────────
+  for (const src of session.inputSources) {
+    if (src.handedness !== 'left') continue;
+    const gp = src.gamepad;
+    if (!gp) continue;
+    // Thumbstick liegt je nach Controller auf axes[2/3] oder axes[0/1]
+    const axX = Math.abs((gp.axes[2] ?? 0)) > Math.abs((gp.axes[0] ?? 0)) ? gp.axes[2] : gp.axes[0];
+    const axY = Math.abs((gp.axes[3] ?? 0)) > Math.abs((gp.axes[1] ?? 0)) ? gp.axes[3] : gp.axes[1];
+    const dead = 0.12;
+    const mx = Math.abs(axX) > dead ? axX : 0;
+    const mz = Math.abs(axY) > dead ? axY : 0;
+    // Weltkoordinaten – Blickrichtung hat keinen Einfluss
+    playerRig.position.x += mx * MOVE_SPEED * dt;
+    playerRig.position.z += mz * MOVE_SPEED * dt;
+    // Grenzen: max 10m nach hinten, nicht hinter/in die Häuser
+    playerRig.position.x = Math.max(-12, Math.min(12, playerRig.position.x));
+    playerRig.position.z = Math.max(-10, Math.min(10, playerRig.position.z));
+  }
 }
 
 // ─── SPIELLOGIK ───────────────────────────────────────────────────────────────
-const PLAYER_POS = new THREE.Vector3(0, 0, 0);
 const tmpVec = new THREE.Vector3();
+const MOVE_SPEED = 3.5;
 
 function update(dt) {
   if (!gs.running) return;
@@ -733,13 +811,35 @@ function update(dt) {
     }
   }
 
+  // Roboter: Abstoßung untereinander
+  for (let i = 0; i < robots.length; i++) {
+    const a = robots[i];
+    if (a.dead) continue;
+    for (let j = i + 1; j < robots.length; j++) {
+      const b = robots[j];
+      if (b.dead) continue;
+      const dx = a.mesh.position.x - b.mesh.position.x;
+      const dz = a.mesh.position.z - b.mesh.position.z;
+      const d2 = dx * dx + dz * dz;
+      if (d2 < 0.64 && d2 > 0.0001) { // 0.64 = 0.8m²
+        const push = (0.8 - Math.sqrt(d2)) * 1.5 * dt;
+        const inv = push / Math.sqrt(d2);
+        a.mesh.position.x += dx * inv;
+        a.mesh.position.z += dz * inv;
+        b.mesh.position.x -= dx * inv;
+        b.mesh.position.z -= dz * inv;
+      }
+    }
+  }
+
   // Roboter bewegen & angreifen
   for (const rob of robots) {
     if (rob.dead) continue;
-    tmpVec.copy(PLAYER_POS).sub(rob.mesh.position);
+    tmpVec.copy(playerRig.position).sub(rob.mesh.position);
+    tmpVec.y = 0; // nur horizontal verfolgen
     const dist = tmpVec.length();
 
-    rob.mesh.lookAt(PLAYER_POS);
+    rob.mesh.lookAt(playerRig.position.x, rob.mesh.position.y, playerRig.position.z);
 
     if (dist > ROBOT_RANGE) {
       tmpVec.normalize();
@@ -803,6 +903,7 @@ function startGame() {
   [...bullets].forEach(b => scene.remove(b.mesh));
   bullets.length = 0;
 
+  playerRig.position.set(0, 0, 0);
   Object.assign(gs, {
     running: true, hp: 100, score: 0, wave: 1, kills: 0, alive: 0,
     weapon: 0, cooldown: 0,
@@ -812,6 +913,7 @@ function startGame() {
   });
   laserBeam.visible = false;
   laserGlow.visible = false;
+  updateWeaponVis();
 
   document.getElementById('menu').style.display    = 'none';
   document.getElementById('gameover').style.display = 'none';
