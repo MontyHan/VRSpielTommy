@@ -519,12 +519,11 @@ wLaserGun.add(mkBox(0.046, 0.040, 0.180, wMats.metal, 0,  0.024, -0.050));
 { const g = mkCyl(0.026, 0.04, wMats.laserGlow); g.rotation.x = Math.PI/2; g.position.set(0, 0.024, -0.155); wLaserGun.add(g); }
 
 const weaponMeshes = [wPistol, wMG, wShotgun, wLaserGun];
-weaponMeshes.forEach(w => ctrl0.add(w));
+weaponMeshes.forEach((w, i) => { ctrl0.add(w); w.visible = (i === 0); });
 
 function updateWeaponVis() {
   weaponMeshes.forEach((w, i) => { w.visible = (i === gs.weapon); });
 }
-updateWeaponVis();
 
 // ─── WAFFEN-KONFIGURATION ─────────────────────────────────────────────────────
 const WEAPONS = [
