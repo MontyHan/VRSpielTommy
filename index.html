@@ -40,6 +40,9 @@
       transition: background 0.2s;
     }
     button:hover { background: #00cc66; }
+    button.unsel { background: #1a2e1a; color: #446644; }
+    button.unsel:hover { background: #223322; color: #669966; }
+    .opt-label { color: #aaa; font-size: 0.95em; margin: 14px 0 2px; }
 
     #finalScore {
       font-size: 1.3em; color: #ffdd00;
@@ -66,12 +69,18 @@
     <span>Y / B</span> — Waffe wechseln<br>
     <span>Linker Joystick</span> — Laufen
   </div>
-  <p style="color:#aaa;font-size:1em;margin:18px 0 10px;">Ziel-Modus wählen:</p>
+  <p class="opt-label">Ziel-Modus:</p>
   <div style="display:flex;gap:14px;">
-    <button id="startGaze">BLICK-MODUS</button>
-    <button id="startWeapon">WAFFEN-MODUS</button>
+    <button id="btnGaze">BLICK</button>
+    <button id="btnWeapon" class="unsel">WAFFE</button>
   </div>
-  <p style="color:#333;font-size:0.75em;margin-top:18px;">v2026-10-09 · 10:00</p>
+  <p class="opt-label">Waffen-Hand:</p>
+  <div style="display:flex;gap:14px;">
+    <button id="btnLeft" class="unsel">LINKS</button>
+    <button id="btnRight">RECHTS</button>
+  </div>
+  <button id="startBtn" style="margin-top:22px;padding:18px 64px;font-size:1.4em;">SPIEL STARTEN</button>
+  <p style="color:#333;font-size:0.75em;margin-top:14px;">v2026-10-09 · 12:00</p>
 </div>
 
 <!-- Game Over -->
@@ -550,15 +559,45 @@ const gs = {
   laserCharge: 1,
   laserRecharging: false,
   aimMode: 'gaze',
+  weaponHand: 'right',
 };
+
+// ─── WAFFEN-CONTROLLER ────────────────────────────────────────────────────────
+let weaponCtrlNode = ctrl0;
+let weaponCtrlResolved = false;
+
+function tryResolveWeaponCtrl() {
+  if (weaponCtrlResolved) return;
+  const session = renderer.xr.getSession();
+  if (!session) return;
+  let i = 0;
+  for (const src of session.inputSources) {
+    if (src.handedness === gs.weaponHand) {
+      const newCtrl = renderer.xr.getController(i);
+      if (newCtrl !== weaponCtrlNode) {
+        [ctrl0, ctrl1].forEach(c => weaponMeshes.forEach(w => c.remove(w)));
+        weaponMeshes.forEach(w => newCtrl.add(w));
+        weaponCtrlNode = newCtrl;
+        updateWeaponVis();
+        if (gs.aimMode === 'weapon') {
+          [camera, ctrl0, ctrl1].forEach(c => { c.remove(laserBeam); c.remove(laserGlow); });
+          newCtrl.add(laserBeam); newCtrl.add(laserGlow);
+        }
+      }
+      weaponCtrlResolved = true;
+      return;
+    }
+    i++;
+  }
+}
 
 function getAimSource() {
   const origin = new THREE.Vector3();
   const dir    = new THREE.Vector3(0, 0, -1);
   const q      = new THREE.Quaternion();
   if (gs.aimMode === 'weapon') {
-    ctrl0.getWorldPosition(origin);
-    ctrl0.getWorldQuaternion(q);
+    weaponCtrlNode.getWorldPosition(origin);
+    weaponCtrlNode.getWorldQuaternion(q);
   } else {
     camera.getWorldPosition(origin);
     camera.getWorldQuaternion(q);
@@ -700,8 +739,9 @@ function handleInput(dt) {
   gs.weaponBtnWasDown = weaponBtnDown;
 
   // ─── BEWEGUNG mit linkem Joystick ─────────────────────────────────────────
+  const moveHand = gs.weaponHand === 'left' ? 'right' : 'left';
   for (const src of session.inputSources) {
-    if (src.handedness !== 'left') continue;
+    if (src.handedness !== moveHand) continue;
     const gp = src.gamepad;
     if (!gp) continue;
     // Thumbstick liegt je nach Controller auf axes[2/3] oder axes[0/1]
@@ -726,6 +766,7 @@ const MOVE_SPEED = 3.5;
 function update(dt) {
   if (!gs.running) return;
 
+  tryResolveWeaponCtrl();
   gs.timeSurvived += dt;
   gs.cooldown = Math.max(0, gs.cooldown - dt);
 
@@ -909,7 +950,7 @@ function killRobot(idx) {
 }
 
 // ─── SPIELSTART / NEUSTART ────────────────────────────────────────────────────
-function startGame(mode) {
+function startGame(mode, hand) {
   // Aufräumen
   [...robots].forEach(r => scene.remove(r.mesh));
   robots.length = 0;
@@ -923,8 +964,10 @@ function startGame(mode) {
     triggerWasDown: false, weaponBtnWasDown: false,
     timeSurvived: 0, waveEnding: false,
     laserActive: false, laserTime: 0, laserCharge: 1, laserRecharging: false,
-    aimMode: mode ?? gs.aimMode,
+    aimMode:     mode ?? gs.aimMode,
+    weaponHand:  hand ?? gs.weaponHand,
   });
+  weaponCtrlResolved = false;
 
   // Laserstrahl je nach Modus an das richtige Objekt hängen
   camera.remove(laserBeam); camera.remove(laserGlow);
@@ -959,9 +1002,26 @@ function endGame() {
      Überlebenszeit: ${Math.floor(gs.timeSurvived)} Sek.`;
 }
 
-document.getElementById('startGaze').addEventListener('click',  () => startGame('gaze'));
-document.getElementById('startWeapon').addEventListener('click', () => startGame('weapon'));
-document.getElementById('restartBtn').addEventListener('click',  () => startGame());
+let pendingAimMode   = 'gaze';
+let pendingWeaponHand = 'right';
+
+function setAimMode(m) {
+  pendingAimMode = m;
+  document.getElementById('btnGaze').classList.toggle('unsel',   m !== 'gaze');
+  document.getElementById('btnWeapon').classList.toggle('unsel', m !== 'weapon');
+}
+function setWeaponHand(h) {
+  pendingWeaponHand = h;
+  document.getElementById('btnLeft').classList.toggle('unsel',  h !== 'left');
+  document.getElementById('btnRight').classList.toggle('unsel', h !== 'right');
+}
+
+document.getElementById('btnGaze').addEventListener('click',   () => setAimMode('gaze'));
+document.getElementById('btnWeapon').addEventListener('click', () => setAimMode('weapon'));
+document.getElementById('btnLeft').addEventListener('click',   () => setWeaponHand('left'));
+document.getElementById('btnRight').addEventListener('click',  () => setWeaponHand('right'));
+document.getElementById('startBtn').addEventListener('click',  () => startGame(pendingAimMode, pendingWeaponHand));
+document.getElementById('restartBtn').addEventListener('click', () => startGame());
 
 // ─── WELT AUFBAUEN ────────────────────────────────────────────────────────────
 buildArena();
