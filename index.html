@@ -64,10 +64,14 @@
   <div class="controls-hint">
     <span>Trigger</span> — Schießen &nbsp;|&nbsp;
     <span>Y / B</span> — Waffe wechseln<br>
-    <span>Kopfbewegung</span> — Zielen &amp; Drehen
+    <span>Linker Joystick</span> — Laufen
   </div>
-  <button id="startBtn">SPIEL STARTEN</button>
-  <p style="color:#333;font-size:0.75em;margin-top:18px;">v2025-10-08 · 21:00</p>
+  <p style="color:#aaa;font-size:1em;margin:18px 0 10px;">Ziel-Modus wählen:</p>
+  <div style="display:flex;gap:14px;">
+    <button id="startGaze">BLICK-MODUS</button>
+    <button id="startWeapon">WAFFEN-MODUS</button>
+  </div>
+  <p style="color:#333;font-size:0.75em;margin-top:18px;">v2026-10-09 · 10:00</p>
 </div>
 
 <!-- Game Over -->
@@ -434,7 +438,6 @@ laserBeam.rotation.x = Math.PI / 2;
 laserBeam.position.z = -17.5;
 laserBeam.visible = false;
 laserBeam.renderOrder = 997;
-camera.add(laserBeam);
 
 const laserGlow = new THREE.Mesh(
   new THREE.CylinderGeometry(0.04, 0.04, 35, 8),
@@ -444,7 +447,7 @@ laserGlow.rotation.x = Math.PI / 2;
 laserGlow.position.z = -17.5;
 laserGlow.visible = false;
 laserGlow.renderOrder = 996;
-camera.add(laserGlow);
+// Wird in startGame() je nach Modus an camera oder ctrl0 gehängt
 
 // ─── CONTROLLER ───────────────────────────────────────────────────────────────
 const ctrl0 = renderer.xr.getController(0);
@@ -546,7 +549,23 @@ const gs = {
   laserTime: 0,
   laserCharge: 1,
   laserRecharging: false,
+  aimMode: 'gaze',
 };
+
+function getAimSource() {
+  const origin = new THREE.Vector3();
+  const dir    = new THREE.Vector3(0, 0, -1);
+  const q      = new THREE.Quaternion();
+  if (gs.aimMode === 'weapon') {
+    ctrl0.getWorldPosition(origin);
+    ctrl0.getWorldQuaternion(q);
+  } else {
+    camera.getWorldPosition(origin);
+    camera.getWorldQuaternion(q);
+  }
+  dir.applyQuaternion(q);
+  return { origin, dir };
+}
 
 // ─── GEGNER ───────────────────────────────────────────────────────────────────
 const robots = [];
@@ -616,9 +635,9 @@ const bullets = [];
 function shoot() {
   if (gs.weapon === 3) return;
   const w = WEAPONS[gs.weapon];
+  const { origin, dir: baseDir } = getAimSource();
   for (let i = 0; i < w.pellets; i++) {
-    const dir = new THREE.Vector3(0, 0, -1);
-    dir.applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
+    const dir = baseDir.clone();
     dir.x += (Math.random() - 0.5) * w.spread;
     dir.y += (Math.random() - 0.5) * w.spread;
     dir.normalize();
@@ -627,8 +646,6 @@ function shoot() {
       new THREE.SphereGeometry(0.055, 5, 5),
       new THREE.MeshBasicMaterial({ color: BULLET_COLORS[gs.weapon] })
     );
-    const origin = new THREE.Vector3();
-    camera.getWorldPosition(origin);
     mesh.position.copy(origin);
     scene.add(mesh);
 
@@ -726,11 +743,7 @@ function update(dt) {
     laserBeam.material.opacity = pulse;
     laserGlow.material.opacity = pulse * 0.22;
 
-    // Laserstrahl-Richtung aus Kamera
-    const laserOrigin = new THREE.Vector3();
-    const laserDir = new THREE.Vector3(0, 0, -1);
-    camera.getWorldPosition(laserOrigin);
-    laserDir.applyQuaternion(camera.getWorldQuaternion(new THREE.Quaternion()));
+    const { origin: laserOrigin, dir: laserDir } = getAimSource();
 
     for (let r = robots.length - 1; r >= 0; r--) {
       const rob = robots[r];
@@ -896,7 +909,7 @@ function killRobot(idx) {
 }
 
 // ─── SPIELSTART / NEUSTART ────────────────────────────────────────────────────
-function startGame() {
+function startGame(mode) {
   // Aufräumen
   [...robots].forEach(r => scene.remove(r.mesh));
   robots.length = 0;
@@ -910,7 +923,18 @@ function startGame() {
     triggerWasDown: false, weaponBtnWasDown: false,
     timeSurvived: 0, waveEnding: false,
     laserActive: false, laserTime: 0, laserCharge: 1, laserRecharging: false,
+    aimMode: mode ?? gs.aimMode,
   });
+
+  // Laserstrahl je nach Modus an das richtige Objekt hängen
+  camera.remove(laserBeam); camera.remove(laserGlow);
+  ctrl0.remove(laserBeam);  ctrl0.remove(laserGlow);
+  if (gs.aimMode === 'weapon') {
+    ctrl0.add(laserBeam); ctrl0.add(laserGlow);
+  } else {
+    camera.add(laserBeam); camera.add(laserGlow);
+  }
+
   laserBeam.visible = false;
   laserGlow.visible = false;
   updateWeaponVis();
@@ -935,8 +959,9 @@ function endGame() {
      Überlebenszeit: ${Math.floor(gs.timeSurvived)} Sek.`;
 }
 
-document.getElementById('startBtn').addEventListener('click', startGame);
-document.getElementById('restartBtn').addEventListener('click', startGame);
+document.getElementById('startGaze').addEventListener('click',  () => startGame('gaze'));
+document.getElementById('startWeapon').addEventListener('click', () => startGame('weapon'));
+document.getElementById('restartBtn').addEventListener('click',  () => startGame());
 
 // ─── WELT AUFBAUEN ────────────────────────────────────────────────────────────
 buildArena();
